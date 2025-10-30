@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker, Session
 from fastapi import FastAPI, Depends, HTTPException, status, Path
@@ -11,16 +11,21 @@ from sqlalchemy import Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import class_mapper, ColumnProperty
 
-DATABASE_URL = "mssql+pyodbc://@localhost\SQLEXPRESS/WebSite?driver=ODBC+Driver+18+for+SQL+Server&Trusted_Connection=yes&TrustServerCertificate=yes"
-#DATABASE_URL = "mssql+pyodbc://@localhost\\SQLEXPRESS/WebSite?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
+# DATABASE_URL = "postgresql+psycopg://postgres:@localhost:5432/website"
+DATABASE_URL = "postgresql+psycopg://postgres:3374@127.0.0.1:5432/website"
 app = FastAPI()
 
 engine = create_engine(DATABASE_URL)
 
 Base = automap_base()
+Base.prepare(autoload_with=engine, schema="public")  # <— ключевая строка
+
+print("Mapped classes:", Base.classes.keys())
+
+Base = automap_base()
 Base.prepare(engine, reflect=True)
 
-User = Base.classes.Users  
+User = Base.classes.users  
 Product = Base.classes.Products
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

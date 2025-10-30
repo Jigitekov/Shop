@@ -1,30 +1,41 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.automap import automap_base
-from sqlalchemy.orm import sessionmaker, Session
 from fastapi import FastAPI, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from typing import List, Optional
+from pydantic import BaseModel, EmailStr
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Numeric, func
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-# Define the connection string to your MSSQL database
-DATABASE_URL = "mssql+pyodbc://@localhost\\SQLEXPRESS/project.rz?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
 
-app = FastAPI()
+DATABASE_URL = "postgresql+psycopg://postgres:3374@127.0.0.1:5432/website"
 
-# Create an engine that the Session will use for connection resources
-engine = create_engine(DATABASE_URL)
 
-# Reflect an existing database into a new model
-Base = automap_base()
-# Reflect the tables
-Base.prepare(engine, reflect=True)
+engine = create_engine(DATABASE_URL, echo=True, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+Base = declarative_base()
 
-# mapped classes are now created with names by default
-# matching that of the table name.
-User = Base.classes.Users  # Make sure this matches the table name exactly
-Product = Base.classes.Products
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    address = Column(String(255), nullable=True)
+    phone_number = Column(String(30), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
-# Dependency to get the database session
+class Product(Base):
+    __tablename__ = "products"
+    id = Column(Integer, primary_key=True, index=True)
+    product_name = Column(String(120), nullable=False, index=True)
+    description = Column(String(1000), nullable=True)
+    price = Column(Numeric(12, 2), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Shop API")
+
 def get_db():
     db = SessionLocal()
     try:
@@ -34,70 +45,78 @@ def get_db():
 
 class UserCreate(BaseModel):
     username: str
-    email: str
-    address: str
-    phone_number: str
-    user_id: int
+    email: EmailStr
     password: str
+    address: Optional[str] = None
+    phone_number: Optional[str] = None
 
-class UserCheck(BaseModel):
-    user_id: int
-    password: str
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)  
+    id: int
+    username: str
+    email: EmailStr
+    address: Optional[str] = None
+    phone_number: Optional[str] = None
 
-@app.get("/users/")
-def read_users(db: Session = Depends(get_db)):
-    users = db.query(User).all()
-    # Serialize the query results into a JSON-compatible format
-    return [
-        {
-            "username": user.username,
-            "email": user.email,
-            "user_id": user.user_id,
-            "address": user.address,
-            "phone_number": user.phone_number,
-        }
-        for user in users
-    ]
+class ProductCreate(BaseModel):
+    product_name: str
+    description: Optional[str] = None
+    price: float
 
-@app.get("/products/")
-def read_products(db: Session = Depends(get_db)):
-    products = db.query(Product).all()
-    # Serialize the query results into a JSON-compatible format
-    return [
-        {
-            "product_name": product.product_name,
-            "description": product.description,
-            "product_ID": product.product_ID,
-            "price": product.price,
-        }
-        for product in products
-    ]
+class ProductOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    product_name: str
+    description: Optional[str] = None
+    price: float
 
 
-
-@app.post("/users/")
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    # Logic to create a new user in the database
-    db_user = User(username=user.username, email=user.email, address=user.address, phone_number=user.phone_number, user_id=user.user_id,password=user.password)
-    db.add(db_user)
+@app.post("/users", response_model=UserOut)
+def create_user(payload: UserCreate, db: Session = Depends(get_db)):
+    user = User(
+        username=payload.username,
+        email=payload.email,
+        hashed_password=payload.password,  
+        address=payload.address,
+        phone_number=payload.phone_number,
+    )
+    db.add(user)
     try:
         db.commit()
-        db.refresh(db_user)
-        return db_user
-    except:
+        db.refresh(user)
+        return user
+    except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Error creating user")
+        raise HTTPException(status_code=400, detail=f"Cannot create user: {e}")
 
-@app.post("/userCheck/")
-def check_user(user: UserCheck, db: Session = Depends(get_db)):
-    # Logic to create a new user in the database
-    existing_user = db.query(User).filter(User.user_id == user.user_id).first()
+@app.get("/users", response_model=List[UserOut])
+def list_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
 
-    if existing_user:
-        print("Yes")
-    else:
-        print("NO")
-    return{"message": {"User checked"}}
+@app.get("/users/{user_id}", response_model=UserOut)
+def read_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@app.post("/products", response_model=ProductOut)
+def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
+    product = Product(
+        product_name=payload.product_name,
+        description=payload.description,
+        price=payload.price,
+    )
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return product
+
+@app.get("/products", response_model=List[ProductOut])
+def list_products(db: Session = Depends(get_db)):
+    return db.query(Product).all()
+
 if __name__ == "__main__":
     import uvicorn
-uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
